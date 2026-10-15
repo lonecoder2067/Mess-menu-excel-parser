@@ -27,7 +27,8 @@ class MainActivity : ComponentActivity() {
             DashboardScreen(
                 state = viewModel.state.value,
                 onSelectDate = viewModel::selectDate,
-                onChangeMonth = viewModel::changeMonth,\n                onImportClick = {
+                onChangeMonth = viewModel::changeMonth,
+                onImportClick = {
                     filePicker.launch(
                         arrayOf(
                             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
