@@ -1,6 +1,7 @@
 package com.example.messmenuapp.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -38,6 +39,7 @@ private val Ink = Color(0xFF202A24)
 private val Muted = Color(0xFF727C75)
 private val Green = Color(0xFF236B4E)
 private val Canvas = Color(0xFFF5F7F2)
+private val Line = Color(0xFFE7ECE6)
 
 @Composable
 fun DashboardScreen(state: DashboardState, onImportClick: () -> Unit, onSelectDate: (LocalDate) -> Unit, onChangeMonth: (Long) -> Unit) {
@@ -48,28 +50,31 @@ fun DashboardScreen(state: DashboardState, onImportClick: () -> Unit, onSelectDa
                 .padding(horizontal = 20.dp, vertical = 18.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text("MESS MENU", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Green, letterSpacing = 2.sp)
-                Text("Plan your meals.", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Ink)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("YOUR MESS", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Green, letterSpacing = 1.8.sp)
+                    Text("Today's menu", fontSize = 27.sp, fontWeight = FontWeight.Bold, color = Ink)
+                }
+                Box(Modifier.size(46.dp).clip(RoundedCornerShape(16.dp)).background(Color(0xFFE5EFE7)), contentAlignment = Alignment.Center) { Text("☘", fontSize = 23.sp, color = Green) }
             }
 
-            Button(onClick = onImportClick, modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(16.dp), colors = ButtonDefaults.buttonColors(containerColor = Green)) {
-                Text(if (state.menu.isEmpty()) "Import spreadsheet" else "Update spreadsheet", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            OutlinedButton(onClick = onImportClick, modifier = Modifier.fillMaxWidth().height(48.dp), shape = RoundedCornerShape(15.dp), border = BorderStroke(1.dp, Line), colors = ButtonDefaults.outlinedButtonColors(contentColor = Green)) {
+                Text(if (state.menu.isEmpty()) "＋  Import menu spreadsheet" else "＋  Update menu spreadsheet", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
             }
             if (state.isLoading) LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = Green)
             if (state.menu.isNotEmpty()) CalendarCard(state, onSelectDate, onChangeMonth)
             Column(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(26.dp))
-                    .background(Brush.linearGradient(listOf(Color(0xFF28694D), Color(0xFF5A9B6D))))
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp))
+                    .background(Brush.linearGradient(listOf(Color(0xFF184F3B), Color(0xFF39805A))))
                     .padding(22.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text("SELECTED DAY", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = .82f), letterSpacing = 1.5.sp)
-                Text(menu?.day ?: state.selectedDate.toString(), fontSize = 25.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Text("MENU FOR", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = .78f), letterSpacing = 1.6.sp)
+                Text(state.selectedDate.format(java.time.format.DateTimeFormatter.ofPattern("EEEE, MMM d")), fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color.White)
                 Text(
                     when {
                         state.isLoading -> "Reading your spreadsheet"
-                        menu != null -> "Four meals planned for your day"
+                        menu != null -> "A look at what's on the table today"
                         state.menu.isNotEmpty() -> "No menu found for this date"
                         else -> "Import your mess schedule to get started"
                     },
@@ -84,7 +89,10 @@ fun DashboardScreen(state: DashboardState, onImportClick: () -> Unit, onSelectDa
                 )
             } else {
                 if (menu == null) InfoCard("No menu for this day", "Choose a highlighted date to see its meals.") else {
-                Text("MEALS", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Muted, letterSpacing = 1.4.sp)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("TODAY'S MEALS", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Muted, letterSpacing = 1.4.sp)
+                    Text("${listOf(menu.breakfast, menu.lunch, menu.snacks, menu.dinner).sumOf(::mealItemCount)} items", fontSize = 12.sp, color = Muted)
+                }
                 MealCard("Breakfast", menu.breakfast, "☀")
                 MealCard("Lunch", menu.lunch, "◉")
                 MealCard("Snacks", menu.snacks, "✦")
@@ -156,8 +164,26 @@ private fun MealCard(title: String, value: String, mark: String) {
             ) { Text(mark, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Green) }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 Text(title, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Green)
-                Text(value.ifBlank { "No items listed" }, fontSize = 15.sp, color = if (value.isBlank()) Muted else Ink, lineHeight = 21.sp)
+                val foods = mealItems(value)
+                if (foods.isEmpty()) {
+                    Text("No items listed", fontSize = 14.sp, color = Muted)
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                        foods.forEach { food ->
+                            Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                                Box(Modifier.padding(top = 7.dp).size(6.dp).clip(RoundedCornerShape(3.dp)).background(Color(0xFF83AD88)))
+                                Text(food, fontSize = 14.sp, color = Ink, lineHeight = 20.sp)
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 }
+
+private fun mealItems(value: String): List<String> = value.split(Regex("[,;\\n•]+"))
+    .map { it.trim().trimStart('-', '•').trim() }
+    .filter(String::isNotBlank)
+
+private fun mealItemCount(value: String): Int = mealItems(value).size
