@@ -2,14 +2,14 @@ package com.example.messmenuapp.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -24,89 +24,107 @@ data class MenuItemUI(
     val dinner: String
 )
 
+private val Ink = Color(0xFF202A24)
+private val Muted = Color(0xFF727C75)
+private val Green = Color(0xFF236B4E)
+private val Canvas = Color(0xFFF5F7F2)
+
 @Composable
-fun DashboardScreen(menuList: List<MenuItemUI>, onImportClick: () -> Unit) {
-    val gradient = Brush.linearGradient(listOf(Color(0xFF5F7BFF), Color(0xFFB68CFF)))
-
-    Box(Modifier.fillMaxSize().background(Color(0xFFF6F7FB))) {
-        Column(Modifier.fillMaxSize().padding(20.dp)) {
-            Text("Mess Menu", fontSize = 30.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(6.dp))
-            Text("Take Charge Of Your Meals", fontSize = 16.sp, color = Color.Gray)
-            Spacer(Modifier.height(24.dp))
-
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(140.dp)
-                    .shadow(8.dp, RoundedCornerShape(28.dp))
-                    .background(gradient, RoundedCornerShape(28.dp))
-                    .padding(24.dp)
-            ) {
-                Column {
-                    Text("Today's Menu", fontSize = 14.sp, color = Color.White)
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        if (menuList.isEmpty()) "No menu" else "Ready",
-                        fontSize = 32.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text("Today's menu schedule", fontSize = 13.sp, color = Color.White)
-                }
+fun DashboardScreen(state: DashboardState, onImportClick: () -> Unit) {
+    val menu = state.menu.firstOrNull()
+    Scaffold(containerColor = Canvas) { padding ->
+        Column(
+            Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp, vertical = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp)
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text("MESS MENU", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Green, letterSpacing = 2.sp)
+                Text("Eat well today.", fontSize = 30.sp, fontWeight = FontWeight.Bold, color = Ink)
+                Text("Your daily meal plan, all in one place.", fontSize = 15.sp, color = Muted)
             }
 
-            Spacer(Modifier.height(24.dp))
+            Column(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(26.dp))
+                    .background(Brush.linearGradient(listOf(Color(0xFF28694D), Color(0xFF5A9B6D))))
+                    .padding(22.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text("TODAY'S MENU", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = .82f), letterSpacing = 1.5.sp)
+                Text(menu?.day ?: if (state.isLoading) "Getting your menu…" else "What's cooking?", fontSize = 25.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Text(
+                    when {
+                        state.isLoading -> "Reading your spreadsheet"
+                        menu != null -> "Four meals planned for your day"
+                        else -> "Import your mess schedule to get started"
+                    },
+                    fontSize = 14.sp, color = Color.White.copy(alpha = .88f)
+                )
+            }
 
             Button(
                 onClick = onImportClick,
-                modifier = Modifier.fillMaxWidth().height(56.dp),
-                shape = RoundedCornerShape(28.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color.Black, contentColor = Color.White)
+                modifier = Modifier.fillMaxWidth().height(54.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Green, contentColor = Color.White)
             ) {
-                Text("Import New Menu", fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                Text(if (menu == null) "Choose menu spreadsheet" else "Update menu", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             }
 
-            Spacer(Modifier.height(24.dp))
-
-            LazyColumn(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                items(menuList) { TodayMenuCard(it) }
+            if (state.isLoading) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = Green)
+            } else if (menu == null) {
+                InfoCard(
+                    title = if (state.message == null) "Your menu starts here" else "We couldn't find today's menu",
+                    body = state.message ?: "Select the .xlsx schedule shared by your mess. Your menu will be saved on this device."
+                )
+            } else {
+                Text("TODAY'S MEALS", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Muted, letterSpacing = 1.4.sp)
+                MealCard("Breakfast", menu.breakfast, "☀")
+                MealCard("Lunch", menu.lunch, "◉")
+                MealCard("Snacks", menu.snacks, "✦")
+                MealCard("Dinner", menu.dinner, "☾")
+                Text("Menu imported from your spreadsheet", fontSize = 12.sp, color = Muted, modifier = Modifier.align(Alignment.CenterHorizontally))
             }
+            Spacer(Modifier.height(8.dp))
         }
     }
 }
 
 @Composable
-private fun TodayMenuCard(item: MenuItemUI) {
+private fun InfoCard(title: String, body: String) {
     Card(
-        shape = RoundedCornerShape(22.dp),
-        elevation = CardDefaults.cardElevation(4.dp),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White)
     ) {
-        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(item.day, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-            MealBox("Breakfast", item.breakfast)
-            MealBox("Lunch", item.lunch)
-            MealBox("Snacks", item.snacks)
-            MealBox("Dinner", item.dinner)
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Ink)
+            Text(body, fontSize = 14.sp, color = Muted, lineHeight = 21.sp)
         }
     }
 }
 
 @Composable
-private fun MealBox(title: String, value: String) {
+private fun MealCard(title: String, value: String, mark: String) {
     Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFFF7F7FA)),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White)
     ) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically
+            Modifier.fillMaxWidth().padding(17.dp),
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            Text(title, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(.30f))
-            Text(if (value.isBlank()) "—" else value, fontSize = 14.sp, modifier = Modifier.weight(.70f))
+            Box(
+                Modifier.size(38.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFFEAF3EC)),
+                contentAlignment = Alignment.Center
+            ) { Text(mark, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Green) }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text(title, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Green)
+                Text(value.ifBlank { "No items listed" }, fontSize = 15.sp, color = if (value.isBlank()) Muted else Ink, lineHeight = 21.sp)
+            }
         }
     }
 }

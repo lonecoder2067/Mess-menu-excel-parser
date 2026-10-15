@@ -16,16 +16,20 @@ class MainActivity : ComponentActivity() {
         uri?.let { viewModel.importExcel(it) }
     }
 
+    override fun onResume() {
+        super.onResume()
+        viewModel.refresh()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             DashboardScreen(
-                menuList = viewModel.menuList.value,
+                state = viewModel.state.value,
                 onImportClick = {
                     filePicker.launch(
                         arrayOf(
-                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            "application/vnd.ms-excel"
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         )
                     )
                 }

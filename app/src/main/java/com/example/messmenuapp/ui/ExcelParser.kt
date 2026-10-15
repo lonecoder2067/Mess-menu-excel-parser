@@ -22,20 +22,22 @@ import java.util.zip.ZipInputStream
  */
 object ExcelParser {
 
+    data class Result(val menu: List<MenuItemUI>, val message: String? = null)
+
     private val dayNames = listOf(
         "sun", "mon", "tue", "wed", "thu", "fri", "sat",
         "sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"
     )
 
-    fun parseExcel(context: Context, uri: Uri): List<MenuItemUI> {
+    fun parseExcel(context: Context, uri: Uri): Result {
         val today = LocalDate.now()
         return try {
             context.contentResolver.openInputStream(uri)?.use { input ->
                 val rows = XlsxReader.readFirstSheet(input)
-                if (rows.isEmpty()) return emptyList()
+                if (rows.isEmpty()) return Result(emptyList(), "This workbook has no readable worksheet data.")
 
                 val start = findToday(rows, today)
-                if (start < 0) return emptyList()
+                if (start < 0) return Result(emptyList(), "No row for today was found. Check that the sheet includes the weekday and day number.")
                 val end = findNextHeader(rows, start + 1)
 
                 val breakfast = mutableListOf<String>()
@@ -51,7 +53,7 @@ object ExcelParser {
                     add(row.getOrNull(4), dinner)
                 }
 
-                listOf(
+                Result(listOf(
                     MenuItemUI(
                         formatDate(today),
                         breakfast.joinToString(", "),
@@ -59,11 +61,11 @@ object ExcelParser {
                         snacks.joinToString(", "),
                         dinner.joinToString(", ")
                     )
-                )
-            } ?: emptyList()
+                ))
+            } ?: Result(emptyList(), "Could not open this file. Choose it again from your device.")
         } catch (e: Exception) {
             e.printStackTrace()
-            emptyList()
+            Result(emptyList(), "Could not read this workbook. Make sure it is a valid .xlsx file.")
         }
     }
 
@@ -156,7 +158,9 @@ private object XlsxReader {
         var event = wp.eventType
         while (event != XmlPullParser.END_DOCUMENT) {
             if (event == XmlPullParser.START_TAG && wp.name == "sheet") {
-                firstRid = wp.getAttributeValue(null, "r:id")
+                firstRid = wp.getAttributeValue(
+                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships", "id"
+                ) ?: wp.getAttributeValue(null, "r:id")
                 break
             }
             event = wp.next()
@@ -180,7 +184,16 @@ private object XlsxReader {
         }
 
         val t = target ?: return "xl/worksheets/$firstRid.xml"
-        return if (t.startsWith("/")) t.removePrefix("/") else "xl/$t"
+        val path = if (t.startsWith("/")) t.removePrefix("/") else "xl/$t"
+        val parts = mutableListOf<String>()
+        path.split('/').forEach { part ->
+            when (part) {
+                "", "." -> Unit
+                ".." -> if (parts.isNotEmpty()) parts.removeAt(parts.lastIndex)
+                else -> parts.add(part)
+            }
+        }
+        return parts.joinToString("/")
     }
 
     private fun parseSharedStrings(bytes: ByteArray): List<String> {

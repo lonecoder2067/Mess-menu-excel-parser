@@ -10,13 +10,20 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+data class DashboardState(
+    val menu: List<MenuItemUI> = emptyList(),
+    val isLoading: Boolean = false,
+    val message: String? = null
+)
+
 class DashboardViewModel(application: Application) : AndroidViewModel(application) {
 
     private val context = application.applicationContext
     private val prefs = context.getSharedPreferences("menu_prefs", 0)
 
-    var menuList = mutableStateOf<List<MenuItemUI>>(emptyList())
+    var state = mutableStateOf(DashboardState())
         private set
+    private var loadJob: kotlinx.coroutines.Job? = null
 
     init {
         loadLastImportedFile()
@@ -30,16 +37,23 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
             // for this session, it just won't survive an app restart.
         }
         prefs.edit().putString("last_file_uri", uri.toString()).apply()
-        viewModelScope.launch {
-            menuList.value = withContext(Dispatchers.IO) { ExcelParser.parseExcel(context, uri) }
-        }
+        load(uri)
     }
 
     private fun loadLastImportedFile() {
         val saved = prefs.getString("last_file_uri", null) ?: return
         val uri = Uri.parse(saved)
-        viewModelScope.launch {
-            menuList.value = withContext(Dispatchers.IO) { ExcelParser.parseExcel(context, uri) }
+        load(uri)
+    }
+
+    fun refresh() = loadLastImportedFile()
+
+    private fun load(uri: Uri) {
+        loadJob?.cancel()
+        state.value = DashboardState(isLoading = true)
+        loadJob = viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { ExcelParser.parseExcel(context, uri) }
+            state.value = DashboardState(menu = result.menu, message = result.message)
         }
     }
 }
