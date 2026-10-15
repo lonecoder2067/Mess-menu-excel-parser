@@ -30,8 +30,28 @@ object ExcelParser {
     }
 
     internal fun parseRows(rows: List<List<String>>, today: LocalDate = LocalDate.now()): List<MenuItemUI> {
+        // Support the common table layout too: one row per date under Breakfast/Lunch/
+        // Snacks/Dinner column headings. Keep section-style spreadsheets working below.
+        val mealColumns = findMealColumns(rows)
+        if (mealColumns.isNotEmpty()) {
+            val tableMenus = rows.mapNotNull { row ->
+                val mealIndexes = mealColumns.values.toSet()
+                val date = row.indices.asSequence().filterNot { it in mealIndexes }
+                    .mapNotNull { parseDate(row[it].trim(), today) }.firstOrNull() ?: return@mapNotNull null
+                val values = mealColumns.map { (meal, column) ->
+                    meal to row.getOrNull(column).orEmpty().cleanCell()
+                }.toMap()
+                MenuItemUI(
+                    date.toString(), values[0].orEmpty(), values[1].orEmpty(),
+                    values[2].orEmpty(), values[3].orEmpty(), date
+                ).takeIf { values.values.any(String::isNotBlank) }
+            }
+            if (tableMenus.isNotEmpty()) return tableMenus.distinctBy { it.date }
+        }
+
         val headers = rows.indices.filter { isHeader(rows[it]) }
         if (headers.isEmpty()) return emptyList()
+        val mealOffset = if ((rows.maxOfOrNull { it.size } ?: 0) <= 4) 0 else 1
         return headers.mapIndexedNotNull { index, start ->
             val date = dateFromRow(rows[start], today) ?: return@mapIndexedNotNull null
             val end = headers.getOrNull(index + 1) ?: rows.size
@@ -39,22 +59,57 @@ object ExcelParser {
             for (r in start + 1 until end) {
                 val row = rows[r]
                 // Standard layout is B:E; also accept compact A:D sheets with an empty first column.
-                val offset = if (row.size <= 4) 0 else 1
-                for (meal in 0..3) row.getOrNull(offset + meal)?.replace(Regex("\\s+"), " ")?.trim()?.takeIf { it.isNotEmpty() }?.let(meals[meal]::add)
+                // Choose the compact A:D layout once for the whole sheet so blank
+                // cells at a row's end cannot shift its meal values.
+                for (meal in 0..3) row.getOrNull(mealOffset + meal)?.cleanCell()?.takeIf { it.isNotEmpty() }?.let(meals[meal]::add)
             }
             MenuItemUI(date.toString(), meals[0].joinToString(", "), meals[1].joinToString(", "), meals[2].joinToString(", "), meals[3].joinToString(", "), date)
         }.distinctBy { it.date }
     }
 
+    private fun findMealColumns(rows: List<List<String>>): Map<Int, Int> {
+        val aliases = mapOf(
+            0 to setOf("breakfast", "morning"),
+            1 to setOf("lunch", "noon"),
+            2 to setOf("snacks", "snack", "evening snacks"),
+            3 to setOf("dinner", "supper")
+        )
+        return rows.asSequence().map { row ->
+            row.mapIndexedNotNull { index, value ->
+                val label = value.trim().lowercase(Locale.ENGLISH).replace(Regex("[^a-z ]"), "").trim()
+                aliases.entries.firstOrNull { (_, names) -> label in names }?.let { it.key to index }
+            }.toMap()
+        }.firstOrNull { it.size >= 3 }.orEmpty()
+    }
+
+    private fun String.cleanCell(): String = replace(Regex("\\s+"), " ").trim()
+
+    private fun parseDate(value: String, today: LocalDate): LocalDate? {
+        if (value.isBlank()) return null
+        dateFromRow(listOf(value), today)?.let { return it }
+        // Excel stores dates as day counts from 1899-12-30. Handle both integer and
+        // fractional serials (time-of-day is ignored).
+        val serial = value.toDoubleOrNull()?.toInt() ?: return null
+        if (serial !in 20_000..80_000) return null
+        return runCatching { LocalDate.of(1899, 12, 30).plusDays(serial.toLong()) }.getOrNull()
+    }
+
     private fun isHeader(row: List<String>): Boolean {
         val text = row.joinToString(" ").lowercase(Locale.ENGLISH)
-        val date = Regex("(?<!\\d)\\d{1,2}(?:st|nd|rd|th)?(?!\\d)|\\b\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}\\b|\\b\\d{1,2}[-/]\\d{1,2}[-/]\\d{2,4}\\b", RegexOption.IGNORE_CASE).containsMatchIn(text)
+        val date = Regex("(?<!\\d)\\d{1,2}(?:st|nd|rd|th)?(?!\\d)|\\b\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}\\b|\\b\\d{1,2}[-/]\\d{1,2}[-/]\\d{2,4}\\b", RegexOption.IGNORE_CASE).containsMatchIn(text) ||
+            row.any { it.toDoubleOrNull()?.toInt()?.let { serial -> serial in 20_000..80_000 } == true }
         val day = weekdays.any { Regex("(?<![a-z])$it(?![a-z])").containsMatchIn(text) }
         return date && day || Regex("\\b\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}\\b|\\b\\d{1,2}[-/]\\d{1,2}[-/]\\d{2,4}\\b").containsMatchIn(text)
     }
 
     private fun dateFromRow(row: List<String>, today: LocalDate): LocalDate? {
         val text = row.joinToString(" ").trim()
+        row.firstNotNullOfOrNull { value ->
+            val serial = value.trim().toDoubleOrNull()?.toInt()
+            if (serial != null && serial in 20_000..80_000) {
+                runCatching { LocalDate.of(1899, 12, 30).plusDays(serial.toLong()) }.getOrNull()
+            } else null
+        }?.let { return it }
         val numeric = Regex("(?<!\\d)(\\d{4})[-/](\\d{1,2})[-/](\\d{1,2})|(?<!\\d)(\\d{1,2})[-/](\\d{1,2})[-/](\\d{2,4})(?!\\d)").find(text)
         if (numeric != null) runCatching {
             val g = numeric.groupValues
