@@ -1,4 +1,4 @@
-package com.example.messmenuapp
+﻿package com.example.messmenuapp
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -26,7 +26,8 @@ class MainActivity : ComponentActivity() {
         setContent {
             DashboardScreen(
                 state = viewModel.state.value,
-                onImportClick = {
+                onSelectDate = viewModel::selectDate,
+                onChangeMonth = viewModel::changeMonth,\n                onImportClick = {
                     filePicker.launch(
                         arrayOf(
                             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -37,3 +38,4 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+

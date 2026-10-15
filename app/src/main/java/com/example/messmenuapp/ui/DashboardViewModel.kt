@@ -9,11 +9,14 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.time.LocalDate
 
 data class DashboardState(
     val menu: List<MenuItemUI> = emptyList(),
     val isLoading: Boolean = false,
-    val message: String? = null
+    val message: String? = null,
+    val selectedDate: LocalDate = LocalDate.now(),
+    val month: LocalDate = LocalDate.now().withDayOfMonth(1)
 )
 
 class DashboardViewModel(application: Application) : AndroidViewModel(application) {
@@ -48,12 +51,15 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun refresh() = loadLastImportedFile()
 
+    fun selectDate(date: LocalDate) { state.value = state.value.copy(selectedDate = date, month = date.withDayOfMonth(1)) }
+    fun changeMonth(delta: Long) { val month = state.value.month.plusMonths(delta); state.value = state.value.copy(month = month, selectedDate = month) }
+
     private fun load(uri: Uri) {
         loadJob?.cancel()
         state.value = DashboardState(isLoading = true)
         loadJob = viewModelScope.launch {
             val result = withContext(Dispatchers.IO) { ExcelParser.parseExcel(context, uri) }
-            state.value = DashboardState(menu = result.menu, message = result.message)
+            state.value = state.value.copy(menu = result.menu, message = result.message, isLoading = false)
         }
     }
 }

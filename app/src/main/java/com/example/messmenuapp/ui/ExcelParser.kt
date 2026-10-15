@@ -7,281 +7,117 @@ import org.xmlpull.v1.XmlPullParser
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.time.LocalDate
+import java.time.Month
+import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle
 import java.util.Locale
 import java.util.zip.ZipInputStream
 
-/**
- * Locked parsing rules (do not change without explicit request):
- *  - Finds the row for TODAY by matching the weekday name (short or full) together with
- *    the day-of-month, allowing an optional ordinal suffix (17th, 31st, etc.).
- *  - Reads every row after that header, until the next "day header" row, taking
- *    column B/C/D/E (index 1-4) as Breakfast/Lunch/Snacks/Dinner respectively.
- *  - Items are joined with ", " and bracketed text is preserved as-is.
- *  - Today's date is displayed as dd-MONTH-yyyy (day).
- */
 object ExcelParser {
-
     data class Result(val menu: List<MenuItemUI>, val message: String? = null)
 
-    private val dayNames = listOf(
-        "sun", "mon", "tue", "wed", "thu", "fri", "sat",
-        "sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"
-    )
+    private val weekdays = listOf("sun", "mon", "tue", "wed", "thu", "fri", "sat", "sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday")
 
-    fun parseExcel(context: Context, uri: Uri): Result {
-        val today = LocalDate.now()
-        return try {
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                val rows = XlsxReader.readFirstSheet(input)
-                if (rows.isEmpty()) return Result(emptyList(), "This workbook has no readable worksheet data.")
+    fun parseExcel(context: Context, uri: Uri): Result = try {
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            val rows = XlsxReader.readFirstSheet(input)
+            val days = parseRows(rows)
+            if (days.isEmpty()) Result(emptyList(), "No dated menu sections were found. Include a date or weekday and day number in the sheet.")
+            else Result(days)
+        } ?: Result(emptyList(), "Could not open this file. Choose it again from your device.")
+    } catch (_: Exception) {
+        Result(emptyList(), "Could not read this workbook. Make sure it is a valid .xlsx file.")
+    }
 
-                val start = findToday(rows, today)
-                if (start < 0) return Result(emptyList(), "No row for today was found. Check that the sheet includes the weekday and day number.")
-                val end = findNextHeader(rows, start + 1)
+    internal fun parseRows(rows: List<List<String>>, today: LocalDate = LocalDate.now()): List<MenuItemUI> {
+        val headers = rows.indices.filter { isHeader(rows[it]) }
+        if (headers.isEmpty()) return emptyList()
+        return headers.mapIndexedNotNull { index, start ->
+            val date = dateFromRow(rows[start], today) ?: return@mapIndexedNotNull null
+            val end = headers.getOrNull(index + 1) ?: rows.size
+            val meals = Array(4) { mutableListOf<String>() }
+            for (r in start + 1 until end) {
+                val row = rows[r]
+                // Standard layout is B:E; also accept compact A:D sheets with an empty first column.
+                val offset = if (row.size <= 4) 0 else 1
+                for (meal in 0..3) row.getOrNull(offset + meal)?.replace(Regex("\\s+"), " ")?.trim()?.takeIf { it.isNotEmpty() }?.let(meals[meal]::add)
+            }
+            MenuItemUI(date.toString(), meals[0].joinToString(", "), meals[1].joinToString(", "), meals[2].joinToString(", "), meals[3].joinToString(", "), date)
+        }.distinctBy { it.date }
+    }
 
-                val breakfast = mutableListOf<String>()
-                val lunch = mutableListOf<String>()
-                val snacks = mutableListOf<String>()
-                val dinner = mutableListOf<String>()
+    private fun isHeader(row: List<String>): Boolean {
+        val text = row.joinToString(" ").lowercase(Locale.ENGLISH)
+        val date = Regex("(?<!\\d)\\d{1,2}(?:st|nd|rd|th)?(?!\\d)|\\b\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}\\b|\\b\\d{1,2}[-/]\\d{1,2}[-/]\\d{2,4}\\b", RegexOption.IGNORE_CASE).containsMatchIn(text)
+        val day = weekdays.any { Regex("(?<![a-z])$it(?![a-z])").containsMatchIn(text) }
+        return date && day || Regex("\\b\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}\\b|\\b\\d{1,2}[-/]\\d{1,2}[-/]\\d{2,4}\\b").containsMatchIn(text)
+    }
 
-                for (i in start + 1 until end) {
-                    val row = rows.getOrNull(i) ?: continue
-                    add(row.getOrNull(1), breakfast)
-                    add(row.getOrNull(2), lunch)
-                    add(row.getOrNull(3), snacks)
-                    add(row.getOrNull(4), dinner)
-                }
-
-                Result(listOf(
-                    MenuItemUI(
-                        formatDate(today),
-                        breakfast.joinToString(", "),
-                        lunch.joinToString(", "),
-                        snacks.joinToString(", "),
-                        dinner.joinToString(", ")
-                    )
-                ))
-            } ?: Result(emptyList(), "Could not open this file. Choose it again from your device.")
-        } catch (e: Exception) {
-            e.printStackTrace()
-            Result(emptyList(), "Could not read this workbook. Make sure it is a valid .xlsx file.")
+    private fun dateFromRow(row: List<String>, today: LocalDate): LocalDate? {
+        val text = row.joinToString(" ").trim()
+        val numeric = Regex("(?<!\\d)(\\d{4})[-/](\\d{1,2})[-/](\\d{1,2})|(?<!\\d)(\\d{1,2})[-/](\\d{1,2})[-/](\\d{2,4})(?!\\d)").find(text)
+        if (numeric != null) runCatching {
+            val g = numeric.groupValues
+            return if (g[1].isNotEmpty()) LocalDate.of(g[1].toInt(), g[2].toInt(), g[3].toInt()) else {
+                var year = g[6].toInt(); if (year < 100) year += 2000
+                LocalDate.of(year, g[5].toInt(), g[4].toInt())
+            }
         }
-    }
-
-    private fun findToday(rows: List<List<String>>, date: LocalDate): Int {
-        val n = date.dayOfMonth.toString()
-        val short = date.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.ENGLISH).lowercase()
-        val full = date.dayOfWeek.getDisplayName(TextStyle.FULL, Locale.ENGLISH).lowercase()
-        val ordinalRegex = Regex("(?<!\\d)(?:0?$n)(?:st|nd|rd|th)?(?!\\d)")
-        rows.forEachIndexed { i, row ->
-            val text = row.joinToString(" ") { it.trim().lowercase() }
-            if ((text.contains(short) || text.contains(full)) && ordinalRegex.containsMatchIn(text)) return i
+        val monthDate = Regex("(?i)\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+([a-z]{3,9})(?:\\s*,?\\s*(\\d{4}))?\\b").find(text)
+            ?: Regex("(?i)\\b([a-z]{3,9})\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:\\s*,?\\s*(\\d{4}))?\\b").find(text)
+        if (monthDate != null) runCatching {
+            val g = monthDate.groupValues
+            val firstIsNumber = g[1].firstOrNull()?.isDigit() == true
+            val day = (if (firstIsNumber) g[1] else g[2]).toInt()
+            val monthText = if (firstIsNumber) g[2] else g[1]
+            val month = Month.entries.firstOrNull { it.getDisplayName(TextStyle.FULL, Locale.ENGLISH).startsWith(monthText, true) || it.getDisplayName(TextStyle.SHORT, Locale.ENGLISH).equals(monthText, true) } ?: return null
+            val year = g[3].toIntOrNull() ?: today.year
+            return LocalDate.of(year, month, day)
         }
-        return -1
-    }
-
-    private fun findNextHeader(rows: List<List<String>>, start: Int): Int {
-        val dateRegex = Regex("(?<!\\d)\\d{1,2}(?:st|nd|rd|th)?(?!\\d)", RegexOption.IGNORE_CASE)
-        for (i in start until rows.size) {
-            val row = rows.getOrNull(i) ?: continue
-            val text = row.joinToString(" ") { it.trim().lowercase() }
-            val hasDay = dayNames.any { Regex("(?<![a-z])$it(?![a-z])").containsMatchIn(text) }
-            val hasDate = dateRegex.containsMatchIn(text)
-            if (hasDay && hasDate) return i
-        }
-        return rows.size
-    }
-
-    private fun add(value: String?, out: MutableList<String>) {
-        if (value == null) return
-        val v = value.replace(Regex("\\s+"), " ").trim()
-        if (v.isNotEmpty()) out.add(v)
-    }
-
-    private fun formatDate(d: LocalDate): String {
-        val month = d.month.getDisplayName(TextStyle.FULL, Locale.ENGLISH).uppercase(Locale.ENGLISH)
-        val day = d.dayOfWeek.getDisplayName(TextStyle.FULL, Locale.ENGLISH)
-        return String.format(Locale.ENGLISH, "%02d-%s-%04d (%s)", d.dayOfMonth, month, d.year, day)
+        val day = Regex("(?<!\\d)(\\d{1,2})(?:st|nd|rd|th)?(?!\\d)").find(text)?.groupValues?.get(1)?.toIntOrNull() ?: return null
+        if (day !in 1..31) return null
+        val weekdayText = weekdays.firstOrNull { Regex("(?<![a-z])$it(?![a-z])", RegexOption.IGNORE_CASE).containsMatchIn(text) } ?: return null
+        val target = (1..7).map { today.plusDays(it.toLong()) }.firstOrNull { it.dayOfMonth == day && it.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.ENGLISH).startsWith(weekdayText.take(3), true) }
+        return target ?: runCatching { LocalDate.of(today.year, today.month, day) }.getOrNull()
     }
 }
 
-/**
- * Minimal, dependency-free XLSX reader.
- *
- * Why not Apache POI: poi-ooxml's runtime relies on javax.xml.stream (StAX), which is not
- * part of the Android platform. It compiles fine but commonly throws NoClassDefFoundError
- * on a real device (a well-documented issue: github.com/centic9/poi-on-android). It also
- * pulls in several large transitive libraries (xmlbeans, commons-compress, curvesapi) that
- * bloat the APK for no benefit here.
- *
- * An .xlsx file is just a zip archive of small XML files, so this reads it with only
- * java.util.zip and Android's built-in XmlPull parser (android.util.Xml) — both ship with
- * every Android version, so there's nothing extra to bundle and no missing-class risk.
- * It returns the same shape the parsing rules above expect: one List<String> per row,
- * cell text indexed by column (0 = A, 1 = B, ...).
- */
 private object XlsxReader {
-
     fun readFirstSheet(input: InputStream): List<List<String>> {
         val entries = HashMap<String, ByteArray>()
-        ZipInputStream(input).use { zis ->
-            var entry = zis.nextEntry
-            while (entry != null) {
-                if (!entry.isDirectory) {
-                    val buffer = ByteArrayOutputStream()
-                    val chunk = ByteArray(8192)
-                    var read = zis.read(chunk)
-                    while (read >= 0) {
-                        buffer.write(chunk, 0, read)
-                        read = zis.read(chunk)
-                    }
-                    entries[entry.name] = buffer.toByteArray()
-                }
-                zis.closeEntry()
-                entry = zis.nextEntry
+        ZipInputStream(input).use { zip ->
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                if (!entry.isDirectory) { val out = ByteArrayOutputStream(); val buf = ByteArray(8192); while (true) { val n = zip.read(buf); if (n < 0) break; out.write(buf, 0, n) }; entries[entry.name] = out.toByteArray() }
             }
         }
-
-        val sharedStrings = entries["xl/sharedStrings.xml"]?.let { parseSharedStrings(it) } ?: emptyList()
-        val sheetPath = resolveFirstSheetPath(entries) ?: "xl/worksheets/sheet1.xml"
-        val sheetBytes = entries[sheetPath] ?: entries["xl/worksheets/sheet1.xml"] ?: return emptyList()
-        return parseSheet(sheetBytes, sharedStrings)
+        val strings = entries["xl/sharedStrings.xml"]?.let(::parseStrings) ?: emptyList()
+        val path = resolveSheet(entries) ?: "xl/worksheets/sheet1.xml"
+        return entries[path]?.let { parseSheet(it, strings) } ?: emptyList()
     }
-
-    private fun resolveFirstSheetPath(entries: Map<String, ByteArray>): String? {
-        val workbookXml = entries["xl/workbook.xml"] ?: return null
-        val relsXml = entries["xl/_rels/workbook.xml.rels"]
-
-        var firstRid: String? = null
-        val wp = parser(workbookXml)
-        var event = wp.eventType
-        while (event != XmlPullParser.END_DOCUMENT) {
-            if (event == XmlPullParser.START_TAG && wp.name == "sheet") {
-                firstRid = wp.getAttributeValue(
-                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships", "id"
-                ) ?: wp.getAttributeValue(null, "r:id")
-                break
-            }
-            event = wp.next()
-        }
-
-        if (relsXml == null || firstRid == null) {
-            return firstRid?.let { "xl/worksheets/$it.xml" }
-        }
-
-        var target: String? = null
-        val rp = parser(relsXml)
-        event = rp.eventType
-        while (event != XmlPullParser.END_DOCUMENT) {
-            if (event == XmlPullParser.START_TAG && rp.name == "Relationship" &&
-                rp.getAttributeValue(null, "Id") == firstRid
-            ) {
-                target = rp.getAttributeValue(null, "Target")
-                break
-            }
-            event = rp.next()
-        }
-
-        val t = target ?: return "xl/worksheets/$firstRid.xml"
-        val path = if (t.startsWith("/")) t.removePrefix("/") else "xl/$t"
-        val parts = mutableListOf<String>()
-        path.split('/').forEach { part ->
-            when (part) {
-                "", "." -> Unit
-                ".." -> if (parts.isNotEmpty()) parts.removeAt(parts.lastIndex)
-                else -> parts.add(part)
-            }
-        }
-        return parts.joinToString("/")
+    private fun parser(bytes: ByteArray) = Xml.newPullParser().apply { setInput(bytes.inputStream(), "UTF-8") }
+    private fun resolveSheet(entries: Map<String, ByteArray>): String? {
+        val wb = entries["xl/workbook.xml"] ?: return null
+        val p = parser(wb); var rid: String? = null
+        while (p.eventType != XmlPullParser.END_DOCUMENT) { if (p.eventType == XmlPullParser.START_TAG && p.name == "sheet") { rid = p.getAttributeValue("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "id"); break }; p.next() }
+        val rels = entries["xl/_rels/workbook.xml.rels"] ?: return "xl/worksheets/sheet1.xml"
+        val rp = parser(rels); var target: String? = null
+        while (rp.eventType != XmlPullParser.END_DOCUMENT) { if (rp.eventType == XmlPullParser.START_TAG && rp.name == "Relationship" && rp.getAttributeValue(null, "Id") == rid) { target = rp.getAttributeValue(null, "Target"); break }; rp.next() }
+        return target?.let { if (it.startsWith("/")) it.drop(1) else "xl/$it" }?.split('/')?.fold(mutableListOf<String>()) { acc, part -> when (part) { ".." -> if (acc.isNotEmpty()) acc.removeAt(acc.lastIndex); ".", "" -> Unit; else -> acc.add(part) }; acc }?.joinToString("/")
     }
-
-    private fun parseSharedStrings(bytes: ByteArray): List<String> {
-        val result = mutableListOf<String>()
-        val p = parser(bytes)
-        var event = p.eventType
-        val current = StringBuilder()
-        var inSi = false
-        while (event != XmlPullParser.END_DOCUMENT) {
-            when (event) {
-                XmlPullParser.START_TAG -> if (p.name == "si") {
-                    inSi = true
-                    current.setLength(0)
-                }
-                XmlPullParser.TEXT -> if (inSi) current.append(p.text)
-                XmlPullParser.END_TAG -> if (p.name == "si") {
-                    result.add(current.toString())
-                    inSi = false
-                }
-            }
-            event = p.next()
-        }
-        return result
+    private fun parseStrings(bytes: ByteArray): List<String> {
+        val out = mutableListOf<String>(); val p = parser(bytes); val current = StringBuilder(); var inside = false
+        while (p.eventType != XmlPullParser.END_DOCUMENT) { when (p.eventType) { XmlPullParser.START_TAG -> if (p.name == "si") { inside = true; current.setLength(0) }; XmlPullParser.TEXT -> if (inside) current.append(p.text); XmlPullParser.END_TAG -> if (p.name == "si") { out.add(current.toString()); inside = false } }; p.next() }
+        return out
     }
-
-    private fun parseSheet(bytes: ByteArray, sharedStrings: List<String>): List<List<String>> {
-        val rows = mutableListOf<MutableList<String>>()
-        val p = parser(bytes)
-        var event = p.eventType
-
-        var rowIndex = -1
-        var colIndex = -1
-        var cellType: String? = null
-        val cellValue = StringBuilder()
-        var inValue = false
-        var inInlineText = false
-
-        while (event != XmlPullParser.END_DOCUMENT) {
-            when (event) {
-                XmlPullParser.START_TAG -> when (p.name) {
-                    "row" -> {
-                        val r = p.getAttributeValue(null, "r")?.toIntOrNull()
-                        rowIndex = (r?.minus(1)) ?: (rowIndex + 1)
-                        while (rows.size <= rowIndex) rows.add(mutableListOf())
-                    }
-                    "c" -> {
-                        cellType = p.getAttributeValue(null, "t")
-                        val ref = p.getAttributeValue(null, "r")
-                        colIndex = ref?.let { colIndexFromRef(it) } ?: (colIndex + 1)
-                        cellValue.setLength(0)
-                    }
-                    "v" -> inValue = true
-                    "t" -> inInlineText = true
-                }
-                XmlPullParser.TEXT -> if (inValue || inInlineText) cellValue.append(p.text)
-                XmlPullParser.END_TAG -> when (p.name) {
-                    "v" -> inValue = false
-                    "t" -> inInlineText = false
-                    "c" -> {
-                        if (rowIndex >= 0 && colIndex >= 0) {
-                            val text = if (cellType == "s") {
-                                cellValue.toString().trim().toIntOrNull()?.let { sharedStrings.getOrNull(it) } ?: ""
-                            } else {
-                                cellValue.toString()
-                            }
-                            val row = rows[rowIndex]
-                            while (row.size <= colIndex) row.add("")
-                            row[colIndex] = text
-                        }
-                    }
-                }
-            }
-            event = p.next()
-        }
+    private fun parseSheet(bytes: ByteArray, strings: List<String>): List<List<String>> {
+        val rows = mutableListOf<MutableList<String>>(); val p = parser(bytes); var row = -1; var col = -1; var type = ""; var value = StringBuilder(); var capture = false
+        while (p.eventType != XmlPullParser.END_DOCUMENT) { when (p.eventType) {
+            XmlPullParser.START_TAG -> when (p.name) { "row" -> { row = (p.getAttributeValue(null, "r")?.toIntOrNull()?.minus(1) ?: row + 1); while (rows.size <= row) rows.add(mutableListOf()) }; "c" -> { type = p.getAttributeValue(null, "t") ?: ""; col = p.getAttributeValue(null, "r")?.let(::colIndex) ?: col + 1; value = StringBuilder() }; "v" -> capture = true; "t" -> capture = true }
+            XmlPullParser.TEXT -> if (capture) value.append(p.text)
+            XmlPullParser.END_TAG -> when (p.name) { "v", "t" -> capture = false; "c" -> { if (row >= 0 && col >= 0) { val s = value.toString(); val text = if (type == "s") strings.getOrNull(s.toIntOrNull() ?: -1).orEmpty() else s; while (rows[row].size <= col) rows[row].add(""); rows[row][col] = text } } }
+        }; p.next() }
         return rows
     }
-
-    private fun colIndexFromRef(ref: String): Int {
-        var col = 0
-        for (ch in ref) {
-            if (ch.isLetter()) col = col * 26 + (ch.uppercaseChar() - 'A' + 1) else break
-        }
-        return col - 1
-    }
-
-    private fun parser(bytes: ByteArray): XmlPullParser {
-        val p = Xml.newPullParser()
-        p.setInput(bytes.inputStream(), "UTF-8")
-        return p
-    }
+    private fun colIndex(ref: String): Int { var col = 0; for (c in ref) { if (!c.isLetter()) break; col = col * 26 + (c.uppercaseChar() - 'A' + 1) }; return col - 1 }
 }
